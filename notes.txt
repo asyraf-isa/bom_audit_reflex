@@ -50,6 +50,7 @@ to export file
 reflex export
 
 
+pip install reflex-local-auth
 
 
 The "Easiest" Way: Reflex Cloud (Beta)
@@ -61,5 +62,42 @@ How to do it: 1.  Create an account at cloud.reflex.dev.
 4.  Run reflex deploy from your project folder.
 
 Pros: Zero configuration; handles scaling; free tier available.
-
 Cons: Currently in Beta; less control over the underlying server.
+
+
+
+1. Update your rxconfig.py
+import reflex as rx
+import os
+from dotenv import load_dotenv
+
+# This loads the variables from a .env file (for local testing)
+load_dotenv()
+
+config = rx.Config(
+    app_name="bom_audit_reflex",
+    # 1. Get the URL from environment, or 2. Use local sqlite as backup
+    db_url=os.getenv("DATABASE_URL", "sqlite:///reflex.db"),
+    plugins=[
+        rx.plugins.SitemapPlugin(),
+        rx.plugins.TailwindV4Plugin(),
+    ]
+)
+
+2. Create a .env file (Local Testing)
+DATABASE_URL="postgresql://user:password@ep-your-project-id.neon.tech/neondb?sslmode=require"
+
+3. Essential: Install the Postgres Driver
+pip install psycopg2-binary python-dotenv
+
+4. How to get the URL from Neon
+Go to your Neon Dashboard.
+On the right side, find the Connection Details widget.
+Ensure the language is set to "Parameters" or "Connection String".
+Copy the long URL that starts with postgresql://.
+
+5. Deploying to Reflex Cloud
+When you are ready to publish using reflex deploy:
+The Reflex CLI will ask you for your environment variables.
+Give it the name DATABASE_URL.
+Paste your Neon string as the value.
