@@ -1,0 +1,19 @@
+What i do in this folder
+
+1.Create virtual environment : python -m venv myvenv
+2.Activate virtual environment: myvenv\Scripts\activate
+
+to remove
+deactivate
+Remove-Item -Recurse -Force myvenv
+
+pip install reflex
+reflex init
+choose
+(0) A blank Reflex app.
+
+to run 
+reflex run
+
+to create requirement file
+pip freeze > requirements.txt
