@@ -445,3 +445,30 @@ class DatabaseManager:
                 return report
         except Exception as e:
             raise Exception(f"Report generation error: {e}")
+        
+    def get_material_history(self):
+        """Retrieve all history where price value is changed"""
+        try:
+            # Use connection helper
+            with self.get_conn() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute('''
+                SELECT m.name, ph.new_price, ph.change_date
+                FROM price_history ph
+                JOIN materials m ON ph.material_id = m.id
+                WHERE material_id IN (
+                    SELECT material_id
+                    FROM price_history
+                    GROUP BY material_id
+                    HAVING COUNT(material_id) > 1
+                )
+                ''')
+                history = cursor.fetchall()
+                if not history:
+                        return False
+                return history
+
+        except sqlite3.Error as e:
+            print(f"Database error: {e}")
+            return []

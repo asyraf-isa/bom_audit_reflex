@@ -8,6 +8,7 @@ class AppState(rx.State):
     products: list[list] = [] 
     recipes: list[list] = [] 
     reports: list[list] = [] 
+    material_history: list[list] = []
 
     # --- Material Methods ---
     # Material Form Fields
@@ -284,12 +285,41 @@ class AppState(rx.State):
             {"Product": report[0], "Selling Price (RM)": report[1]/100, "Profit (RM)": report[4]/100} 
             for report in self.reports
         ]
+    
+    def get_material_history(self):
+        raw_history = db.get_material_history()
+        self.material_history = [list(hist) for hist in raw_history] if raw_history else []
+
+    @rx.var
+    def chart_material_history(self) -> list[dict]:
+        # 1. Use a dict to group by date: { "2023-01-01": {"date": "2023-01-01", "Steel": 10.0, "Copper": 5.0} }
+        wide_data = {}
+        
+        for history in self.material_history:
+            material_name = history[0]
+            price = history[1] / 100
+            date_str = str(history[2]) # Ensure date is a string
+            
+            if date_str not in wide_data:
+                wide_data[date_str] = {"date": date_str}
+            
+            # Add this specific material's price to that date bucket
+            wide_data[date_str][material_name] = price
+                
+        # 2. Return as a sorted list of dicts (sorted by date)
+        return sorted(wide_data.values(), key=lambda x: x["date"])
+
+    @rx.var
+    def material_names(self) -> list[str]:
+        # Get a unique list of all materials present in the history
+        return list(set(hist[0] for hist in self.material_history))
 
 
 from .pages.materials import materials_page
 from .pages.products import products_page
 from .pages.recipes import recipes_page
 from .pages.reports import reports_page
+from .pages.history import history_page
 
 # 4. Setup App and Routes
 app = rx.App()
@@ -297,3 +327,4 @@ app.add_page(materials_page, route="/")
 app.add_page(products_page, route="/products")
 app.add_page(recipes_page, route="/recipes")
 app.add_page(reports_page, route="/reports")
+app.add_page(history_page, route="/history")

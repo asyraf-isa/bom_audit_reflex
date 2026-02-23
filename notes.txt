@@ -45,6 +45,11 @@ Mac/Linux: export DATABASE_URL=your_postgres_url_here
 Run the migration:
 reflex db init
 reflex db migrate
+reflex deploy
+
+reflex cloud apps secret set bom_audit_reflex DATABASE_URL="your_neon_connection_string_here"
+or
+reflex deploy --env DATABASE_URL="your_neon_connection_string_here"
 
 to export file
 reflex export
