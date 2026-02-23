@@ -106,3 +106,6 @@ When you are ready to publish using reflex deploy:
 The Reflex CLI will ask you for your environment variables.
 Give it the name DATABASE_URL.
 Paste your Neon string as the value.
+
+to delete alembic
+rm -r alembic
