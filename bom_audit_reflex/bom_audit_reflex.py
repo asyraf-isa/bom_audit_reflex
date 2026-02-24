@@ -286,6 +286,7 @@ class AppState(rx.State):
             for report in self.reports
         ]
     
+    # --- History Methods ---
     def get_material_history(self):
         raw_history = db.get_material_history()
         self.material_history = [list(hist) for hist in raw_history] if raw_history else []
@@ -298,7 +299,14 @@ class AppState(rx.State):
         for history in self.material_history:
             material_name = history[0]
             price = history[1] / 100
-            date_str = str(history[2]) # Ensure date is a string
+            # Format the datetime object to just 'YYYY-MM-DD'
+            date_val = history[2]
+            if hasattr(date_val, "strftime"):
+                date_str = date_val.strftime("%Y-%m-%d")
+            else:
+                # Fallback if it's already a string: take the first 10 characters
+                date_str = str(date_val)[:10]
+            # -------------------
             
             if date_str not in wide_data:
                 wide_data[date_str] = {"date": date_str}
