@@ -12,9 +12,16 @@ class DatabaseManager:
             separator = "&" if "?" in self.db_url else "?"
             self.db_url += f"{separator}sslmode=require"
                 
-        self.engine = create_engine(self.db_url)
+        # 3. Create engine with resilience settings for cloud environments
+        self.engine = create_engine(
+            self.db_url,
+            pool_pre_ping=True,  # Checks connection health before every query
+            pool_recycle=300,    # Refreshes connections every 5 minutes
+            pool_size=5,
+            max_overflow=10
+        )
         
-        # 3. Build/Sync tables on startup
+        # 4. Build/Sync tables on startup
         self.create_database()
 
     def get_conn(self):
@@ -33,156 +40,162 @@ class DatabaseManager:
                     id {pk_type},
                     name TEXT NOT NULL UNIQUE,
                     unit_cost INTEGER NOT NULL,
-                    unit TEXT NOT NULL,
-                    supplier TEXT)
+                    unit TEXT,
+                    supplier TEXT
+                )
             '''))
-            
+
             # Products Table
             conn.execute(text(f'''
                 CREATE TABLE IF NOT EXISTS products (
                     id {pk_type},
                     name TEXT NOT NULL UNIQUE,
                     selling_price INTEGER NOT NULL,
-                    labor_cost INTEGER NOT NULL,
-                    overhead_cost INTEGER DEFAULT 0)
+                    labor_cost INTEGER DEFAULT 0,
+                    overhead_cost INTEGER DEFAULT 0
+                )
             '''))
 
-            # Recipes Table
+            # Recipes (BOM) Table
             conn.execute(text(f'''
                 CREATE TABLE IF NOT EXISTS recipes (
                     id {pk_type},
-                    product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
-                    material_id INTEGER REFERENCES materials(id) ON DELETE CASCADE,
-                    quantity FLOAT NOT NULL)
+                    product_id INTEGER,
+                    material_id INTEGER,
+                    quantity REAL NOT NULL,
+                    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
+                    FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
+                )
             '''))
 
             # Price History Table
             conn.execute(text(f'''
                 CREATE TABLE IF NOT EXISTS price_history (
                     id {pk_type},
-                    material_id INTEGER REFERENCES materials(id) ON DELETE CASCADE,
+                    material_id INTEGER,
                     old_price INTEGER,
                     new_price INTEGER,
-                    change_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP)
+                    change_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
+                )
             '''))
+
+            # Trigger logic for price tracking
+            if is_postgres:
+                # Postgres Trigger Function
+                conn.execute(text('''
+                    CREATE OR REPLACE FUNCTION log_price_changes()
+                    RETURNS TRIGGER AS $$
+                    BEGIN
+                        IF (OLD.unit_cost IS DISTINCT FROM NEW.unit_cost) THEN
+                            INSERT INTO price_history(material_id, old_price, new_price)
+                            VALUES(OLD.id, OLD.unit_cost, NEW.unit_cost);
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$ LANGUAGE plpgsql;
+                '''))
+                conn.execute(text('''
+                    DROP TRIGGER IF EXISTS trg_price_update ON materials;
+                    CREATE TRIGGER trg_price_update
+                    AFTER UPDATE ON materials
+                    FOR EACH ROW EXECUTE FUNCTION log_price_changes();
+                '''))
+            else:
+                # SQLite Trigger
+                conn.execute(text('''
+                    CREATE TRIGGER IF NOT EXISTS trg_price_update
+                    AFTER UPDATE OF unit_cost ON materials
+                    BEGIN
+                        INSERT INTO price_history(material_id, old_price, new_price)
+                        VALUES(OLD.id, OLD.unit_cost, NEW.unit_cost);
+                    END;
+                '''))
             conn.commit()
 
     # --- Materials Logic ---
-    def insert_material(self, name, unit_cost, unit, supplier):
-        if unit_cost < 0: return False, "Unit cost cannot be negative."
+    def insert_material(self, name, cost, unit, supplier):
         try:
             with self.get_conn() as conn:
-                # Use RETURNING id for Postgres compatibility
-                query = text('''
+                conn.execute(text('''
                     INSERT INTO materials (name, unit_cost, unit, supplier) 
-                    VALUES (:name, :cost, :unit, :sup)
-                    RETURNING id
-                ''')
-                result = conn.execute(query, {"name": name, "cost": unit_cost, "unit": unit, "sup": supplier})
-                new_id = result.fetchone()[0]
-                
-                # Log Initial Price
-                conn.execute(text('''
-                    INSERT INTO price_history (material_id, old_price, new_price)
-                    VALUES (:mid, 0, :new_p)
-                '''), {"mid": new_id, "new_p": unit_cost})
-                
+                    VALUES (:name, :cost, :unit, :supplier)
+                '''), {"name": name, "cost": cost, "unit": unit, "supplier": supplier})
                 conn.commit()
-                return True, f"Material {name} inserted with ID {new_id}."
+                return True, f"Added {name} successfully."
         except IntegrityError:
-            return False, f"Material '{name}' already exists."
-        except Exception as e:
-            print(f"DATABASE ERROR: {e}")
-            return False, f"Error: {str(e)}"
+            return False, "Material name already exists."
 
-    def update_material(self, material_id, name, unit_cost, unit, supplier):
-        try:
-            with self.get_conn() as conn:
-                old = conn.execute(text("SELECT unit_cost FROM materials WHERE id = :id"), {"id": material_id}).fetchone()
-                if not old: return False, "Material not found."
-                
-                conn.execute(text('''
-                    UPDATE materials SET name = :n, unit_cost = :c, unit = :u, supplier = :s WHERE id = :id
-                '''), {"n": name, "c": unit_cost, "u": unit, "s": supplier, "id": material_id})
-
-                if old[0] != unit_cost:
-                    conn.execute(text('''
-                        INSERT INTO price_history (material_id, old_price, new_price)
-                        VALUES (:id, :old, :new)
-                    '''), {"id": material_id, "old": old[0], "new": unit_cost})
-                
-                conn.commit()
-                return True, "Material updated."
-        except Exception as e:
-            return False, str(e)
-
-    def delete_material(self, material_id):
-        try:
-            with self.get_conn() as conn:
-                check = conn.execute(text("SELECT COUNT(*) FROM recipes WHERE material_id = :id"), {"id": material_id}).fetchone()
-                if check[0] > 0:
-                    return False, f"Used in {check[0]} recipes. Remove from recipes first."
-                
-                conn.execute(text("DELETE FROM materials WHERE id = :id"), {"id": material_id})
-                conn.commit()
-                return True, "Material deleted."
-        except Exception as e:
-            return False, str(e)
+    def update_material(self, mat_id, name, cost, unit, supplier):
+        with self.get_conn() as conn:
+            conn.execute(text('''
+                UPDATE materials 
+                SET name = :name, unit_cost = :cost, unit = :unit, supplier = :supplier
+                WHERE id = :id
+            '''), {"name": name, "cost": cost, "unit": unit, "supplier": supplier, "id": mat_id})
+            conn.commit()
+            return True, "Material updated."
 
     def get_materials(self):
         with self.get_conn() as conn:
-            return conn.execute(text("SELECT * FROM materials ORDER BY name ASC")).fetchall()
+            return conn.execute(text("SELECT id, name, unit_cost, unit, supplier FROM materials ORDER BY name ASC")).fetchall()
+
+    def delete_material(self, mat_id):
+        with self.get_conn() as conn:
+            conn.execute(text("DELETE FROM materials WHERE id = :id"), {"id": mat_id})
+            conn.commit()
+            return True, "Material deleted."
 
     # --- Products Logic ---
-    def insert_product(self, name, selling_price, labor_cost, overhead_cost):
-        try:
-            with self.get_conn() as conn:
-                query = text('''
-                    INSERT INTO products (name, selling_price, labor_cost, overhead_cost) 
-                    VALUES (:n, :s, :l, :o) RETURNING id
-                ''')
-                result = conn.execute(query, {"n": name, "s": selling_price, "l": labor_cost, "o": overhead_cost})
-                conn.commit()
-                return True, f"Product {name} created."
-        except IntegrityError:
-            return False, "Product name exists."
-
-    def get_products(self):
-        with self.get_conn() as conn:
-            return conn.execute(text("SELECT * FROM products ORDER BY name ASC")).fetchall()
-
-    def update_product(self, product_id, name, selling_price, labor_cost, overhead_cost):
-        with self.get_conn() as conn:
-            conn.execute(text('''
-                UPDATE products SET name=:n, selling_price=:s, labor_cost=:l, overhead_cost=:o WHERE id=:id
-            '''), {"n": name, "s": selling_price, "l": labor_cost, "o": overhead_cost, "id": product_id})
-            conn.commit()
-            return True, "Product updated."
-
-    def delete_product(self, product_id):
-        with self.get_conn() as conn:
-            conn.execute(text("DELETE FROM products WHERE id = :id"), {"id": product_id})
-            conn.commit()
-            return True, "Product deleted."
-
-    # --- Recipe Logic ---
-    def insert_recipe(self, product_id, material_id, quantity):
+    def insert_product(self, name, sell, labor, overhead):
         try:
             with self.get_conn() as conn:
                 conn.execute(text('''
-                    INSERT INTO recipes (product_id, material_id, quantity) 
-                    VALUES (:pid, :mid, :q)
-                '''), {"pid": product_id, "mid": material_id, "q": quantity})
+                    INSERT INTO products (name, selling_price, labor_cost, overhead_cost) 
+                    VALUES (:name, :sell, :labor, :overhead)
+                '''), {"name": name, "sell": sell, "labor": labor, "overhead": overhead})
                 conn.commit()
-                return True, "Recipe inserted."
-        except Exception as e:
-            return False, str(e)
-        
+                return True, f"Created {name} product."
+        except IntegrityError:
+            return False, "Product name already exists."
+
+    def update_product(self, prod_id, name, sell, labor, overhead):
+        with self.get_conn() as conn:
+            conn.execute(text('''
+                UPDATE products 
+                SET name = :name, selling_price = :sell, labor_cost = :labor, overhead_cost = :overhead
+                WHERE id = :id
+            '''), {"name": name, "sell": sell, "labor": labor, "overhead": overhead, "id": prod_id})
+            conn.commit()
+            return True, "Product updated."
+
+    def get_products(self):
+        with self.get_conn() as conn:
+            return conn.execute(text("SELECT id, name, selling_price, labor_cost, overhead_cost FROM products ORDER BY name ASC")).fetchall()
+
+    def delete_product(self, prod_id):
+        with self.get_conn() as conn:
+            conn.execute(text("DELETE FROM products WHERE id = :id"), {"id": prod_id})
+            conn.commit()
+            return True, "Product deleted."
+
+    # --- Recipes Logic ---
+    def insert_recipe(self, product_id, material_id, quantity):
+        with self.get_conn() as conn:
+            conn.execute(text('''
+                INSERT INTO recipes (product_id, material_id, quantity) 
+                VALUES (:p_id, :m_id, :qty)
+            '''), {"p_id": product_id, "m_id": material_id, "qty": quantity})
+            conn.commit()
+            return True, "Added to recipe."
+
     def update_recipe(self, recipe_id, product_id, material_id, quantity):
         with self.get_conn() as conn:
             conn.execute(text('''
-                UPDATE recipes SET product_id=:p, material_id=:m, quantity=:q WHERE id=:id
-            '''), {"p": product_id, "m": material_id, "q": quantity, "id": recipe_id})
+                UPDATE recipes 
+                SET product_id = :p_id, material_id = :m_id, quantity = :qty
+                WHERE id = :id
+            '''), {"p_id": product_id, "m_id": material_id, "qty": quantity, "id": recipe_id})
             conn.commit()
             return True, "Recipe updated."
 
@@ -191,8 +204,9 @@ class DatabaseManager:
             query = text('''
                 SELECT r.id, p.name, m.name, r.quantity, m.unit_cost, m.unit, m.supplier
                 FROM recipes r
-                JOIN materials m ON r.material_id = m.id
                 JOIN products p ON r.product_id = p.id
+                JOIN materials m ON r.material_id = m.id
+                ORDER BY p.name ASC
             ''')
             return conn.execute(query).fetchall()
 
@@ -201,8 +215,8 @@ class DatabaseManager:
             query = text('''
                 SELECT r.id, p.name, m.name, r.quantity, m.unit_cost, m.unit, m.supplier
                 FROM recipes r
-                JOIN materials m ON r.material_id = m.id
                 JOIN products p ON r.product_id = p.id
+                JOIN materials m ON r.material_id = m.id
                 WHERE r.product_id = :id
             ''')
             return conn.execute(query, {"id": product_id}).fetchall()
@@ -237,6 +251,6 @@ class DatabaseManager:
                 SELECT m.name, ph.new_price, ph.change_date
                 FROM price_history ph
                 JOIN materials m ON ph.material_id = m.id
-                ORDER BY ph.change_date DESC
+                ORDER BY ph.change_date ASC
             ''')
             return conn.execute(query).fetchall()

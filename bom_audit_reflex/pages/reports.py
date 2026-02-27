@@ -108,5 +108,5 @@ def reports_page() -> rx.Component:
             width="100%", # Ensures rx.center takes up full width
         ),
         padding_bottom="5em",
-        on_mount=AppState.get_reports
+        on_mount=AppState.load_all
     )

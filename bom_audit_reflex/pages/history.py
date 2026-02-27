@@ -32,5 +32,5 @@ def history_page() -> rx.Component:
             ),
             width="100%",
         ),
-        on_mount=AppState.get_material_history
+        on_mount=AppState.load_all
     )

@@ -143,5 +143,5 @@ def materials_page() -> rx.Component:
             ),
             padding_x="4em", width="100%", max_width="1250px",
         ),
-        on_mount=AppState.get_materials 
+        on_mount=AppState.load_all
     )
