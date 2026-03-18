@@ -37,7 +37,7 @@ def render_generic_dialog(title, fields, on_submit, on_cancel, editing_prod_id, 
         rx.dialog.trigger(
             rx.button(
                 rx.icon("pencil" if is_edit else "plus"), 
-                f"{'Edit' if is_edit else 'Add'} {title}",
+                f"{'Edit' if is_edit else 'Add'}",
                 on_click=on_cancel if not is_edit else [],
                 variant="solid" if not is_edit else "ghost",
                 color_scheme="blue" if not is_edit else "gray",

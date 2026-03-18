@@ -44,9 +44,9 @@ def navbar() -> rx.Component:
             rx.hstack(
                 rx.hstack(
                     rx.image(
-                        src="/logo.jpg", width="2em", height="auto", border_radius="25%"
+                        src="/logo.png", width="2em", height="auto", border_radius="25%"
                     ),
-                    rx.heading("Reflex", size="6", weight="bold"),
+                    rx.heading("SmartBOM Audit", size="6", weight="bold"),
                     align_items="center",
                 ),
                 rx.menu.root(
